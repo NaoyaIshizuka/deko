@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>自撮りデコ</title>
+  <!-- 笑顔判定ライブラリ（ブラウザ完結・APIキー不要） -->
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #f5f0e8;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100dvh; height: 100vh;
+      display: flex; flex-direction: column;
+      overflow: hidden; -webkit-user-select: none; user-select: none;
+    }
+
+    /* ===== カメラ画面 ===== */
+    #camera-screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .camera-wrapper { flex: 1; position: relative; overflow: hidden; background: #111; min-height: 0; }
+    #video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
+    .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+    .guide-box { width: 58%; aspect-ratio: 3/4; border: 2px solid rgba(255,255,255,0.75); border-radius: 50%; box-shadow: 0 0 0 9999px rgba(0,0,0,0.30); }
+    .guide-hint { margin-top: 14px; font-size: 12px; color: rgba(255,255,255,0.50); letter-spacing: 0.5px; }
+    /* カメラ上のタイトル・ブラケットは削除 */
+    .cam-title, .br { display: none; }
+
+    #error-area { display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px 24px; text-align: center; background: #f5f0e8; }
+    #error-msg { color: #c0392b; font-size: 14px; line-height: 1.9; white-space: pre-line; }
+    #retry-btn { padding: 12px 28px; background: #333; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; letter-spacing: 2px; cursor: pointer; }
+
+    /* シャッターバー */
+    .shutter-bar { height: 108px; background: #f5f0e8; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .shutter-ring { width: 76px; height: 76px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: center; }
+    #capture-btn { width: 60px; height: 60px; border-radius: 50%; background: #333; border: none; cursor: pointer; transition: transform .1s, opacity .1s; -webkit-tap-highlight-color: transparent; }
+    #capture-btn:active { transform: scale(.86); opacity: .75; }
+    #capture-btn:disabled { background: #bbb; cursor: default; }
+
+    /* ローディング */
+    #loading { display: none; position: fixed; inset: 0; background: rgba(245,240,232,.90); flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 200; }
+    .spinner { width: 40px; height: 40px; border: 3px solid rgba(0,0,0,.10); border-top-color: #555; border-radius: 50%; animation: spin .75s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading p { font-size: 13px; color: #888; letter-spacing: 2px; }
+
+    /* ===== 結果画面 ===== */
+    #result-screen { display: none; flex: 1; flex-direction: column; min-height: 0; background: #f5f0e8; }
+    #result-canvas { flex: 1; width: 100%; object-fit: contain; display: block; min-height: 0; }
+    .result-bar { height: 108px; background: #f5f0e8; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; flex-shrink: 0; }
+    #category-label { font-size: 12px; color: #888; letter-spacing: 1px; min-height: 16px; }
+    #retake-btn { padding: 12px 36px; background: #333; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; letter-spacing: 3px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #retake-btn:active { opacity: .70; }
+
+    /* ===== ランディング画面 ===== */
+    #landing-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 500;
+      background: #f5f0e8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 32px;
+      transition: opacity 0.5s ease;
+    }
+    #landing-screen.exit {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .ld-clock-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    .ld-greeting {
+      font-size: 16px;
+      color: #888;
+      letter-spacing: 2px;
+    }
+    .ld-time {
+      font-size: 72px;
+      font-weight: 200;
+      color: #333;
+      letter-spacing: 2px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .ld-date {
+      font-size: 14px;
+      color: #999;
+      letter-spacing: 1px;
+    }
+    .ld-footer {
+      width: 100%;
+      padding: 0 0 52px;
+      display: flex;
+      gap: 12px;
+    }
+    .stamp-btn {
+      flex: 1;
+      padding: 18px 0;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.15s;
+    }
+    .stamp-btn:active { opacity: 0.70; }
+    #syukkin-btn { background: #333; color: #fff; }
+    #taikin-btn  { background: #fff; color: #333; border: 2px solid #ccc; }
+  </style>
+</head>
+<body>
+
+  <!-- ======= ランディング画面 ======= -->
+  <div id="landing-screen">
+    <div class="ld-clock-area">
+      <div class="ld-greeting" id="ld-greeting">おはようございます</div>
+      <div class="ld-time"     id="ld-time">00:00:00</div>
+      <div class="ld-date"     id="ld-date">----年--月--日</div>
+    </div>
+    <div class="ld-footer">
+      <button class="stamp-btn" id="syukkin-btn">出　勤</button>
+      <button class="stamp-btn" id="taikin-btn">退　勤</button>
+    </div>
+  </div>
+
+  <div id="camera-screen">
+    <div class="camera-wrapper">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="overlay">
+        <div class="guide-box"></div>
+        <p class="guide-hint">顔を枠に合わせてね</p>
+      </div>
+      <p class="cam-title">✦ SELFIE DECO ✦</p>
+      <div class="br br-tl"></div><div class="br br-tr"></div>
+      <div class="br br-bl"></div><div class="br br-br"></div>
+    </div>
+    <div id="error-area">
+      <p id="error-msg"></p>
+      <button id="retry-btn">📷 再試行する</button>
+    </div>
+    <div class="shutter-bar">
+      <div class="shutter-ring"><button id="capture-btn"></button></div>
+    </div>
+  </div>
+
+  <div id="loading"><div class="spinner"></div><p>デコ中...</p></div>
+
+  <div id="result-screen">
+    <canvas id="result-canvas"></canvas>
+    <div class="result-bar">
+      <div id="category-label"></div>
+      <button id="retake-btn">↩ もう一回</button>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    const video        = document.getElementById('video');
+    const resultCanvas = document.getElementById('result-canvas');
+    const captureBtn   = document.getElementById('capture-btn');
+    const retakeBtn    = document.getElementById('retake-btn');
+    const retryBtn     = document.getElementById('retry-btn');
+    const errorArea    = document.getElementById('error-area');
+    const errorMsg     = document.getElementById('error-msg');
+    const cameraScreen = document.getElementById('camera-screen');
+    const resultScreen = document.getElementById('result-screen');
+    const categoryLabel= document.getElementById('category-label');
+    const loading      = document.getElementById('loading');
+
+    let mediaStream = null;
+    let _cW = 0, _cH = 0; // capture時のキャンバスサイズ（スタンプクランプ用）
+
+    // 出勤 or 退勤モード
+    let currentMode = 'syukkin'; // 'syukkin' | 'taikin'
+
+    // =============================================
+    // スタンプ画像の定義
+    //
+    // ★ 自作画像に差し替える方法 ★
+    //   1. PNG/JPG画像をBase64に変換（例: https://base64.guru/converter/encode/image）
+    //   2. src: 'data:image/png;base64,XXXXXXXXXX' に差し替えるだけ
+    //   または
+    //   src: 'https://...' で外部URLも使える
+    // =============================================
+    const STAMP_DEFS = {
+
+      // 出勤完了スタンプ（赤いゴム印風）
+      syukkin: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(180,20,20,0.10)" stroke="#c0392b" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#c0392b" stroke-width="2.5"/>
+        <line x1="32" y1="148" x2="168" y2="148" stroke="#c0392b" stroke-width="2.5"/>
+        <text x="100" y="76" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="34" font-weight="900" fill="#c0392b" letter-spacing="6">出 勤</text>
+        <text x="100" y="120" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="34" font-weight="900" fill="#c0392b" letter-spacing="6">完 了</text>
+        <text x="100" y="162" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="11" fill="#c0392b" letter-spacing="3">ATTENDANCE</text>
+      </svg>`,
+
+      // お疲れ様スタンプ（青いゴム印風）
+      otsukare: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(20,80,180,0.08)" stroke="#2471a3" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#2471a3" stroke-width="2.5"/>
+        <text x="100" y="72" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="28" font-weight="900" fill="#2471a3" letter-spacing="3">お疲れ</text>
+        <text x="100" y="108" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="28" font-weight="900" fill="#2471a3" letter-spacing="3">様でした</text>
+        <text x="100" y="148" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="22" fill="#2471a3">✦✦✦</text>
+      </svg>`,
+
+      // GOOD JOBスタンプ（緑）
+      goodjob: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(20,160,80,0.09)" stroke="#1e8449" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#1e8449" stroke-width="2.5"/>
+        <text x="100" y="76" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="42" font-weight="900" fill="#1e8449" letter-spacing="1">GOOD</text>
+        <text x="100" y="124" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="30" font-weight="900" fill="#1e8449" letter-spacing="2">JOB!</text>
+      </svg>`,
+
+      // SPECIALバッジ（金）
+      special: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220">
+        <polygon points="100,6 122,72 192,72 136,112 158,178 100,138 42,178 64,112 8,72 78,72" fill="#f4d03f" stroke="#d4ac0d" stroke-width="4"/>
+        <circle cx="100" cy="105" r="42" fill="#d4ac0d"/>
+        <circle cx="100" cy="105" r="38" fill="#f4d03f"/>
+        <text x="100" y="98" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="13" font-weight="900" fill="#7d6608" letter-spacing="1">SPECIAL</text>
+        <text x="100" y="116" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="18" font-weight="900" fill="#7d6608">★</text>
+        <polygon points="75,195 100,178 125,195 116,215 84,215" fill="#d4ac0d"/>
+      </svg>`,
+
+      // 退勤・笑顔あり：お疲れ様スタンプ（緑）
+      taikin_smile: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(39,174,96,0.10)" stroke="#27ae60" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#27ae60" stroke-width="2.5"/>
+        <line x1="32" y1="52" x2="168" y2="52" stroke="#27ae60" stroke-width="2.5"/>
+        <line x1="32" y1="148" x2="168" y2="148" stroke="#27ae60" stroke-width="2.5"/>
+        <text x="100" y="72" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" font-weight="900" fill="#27ae60" letter-spacing="1">今日も一日</text>
+        <text x="100" y="102" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="22" font-weight="900" fill="#27ae60" letter-spacing="1">お疲れ様🍵</text>
+        <text x="100" y="163" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" fill="#27ae60">😊 🍵 😊</text>
+      </svg>`,
+
+      // 退勤・笑顔なし：ゆっくり休んでねスタンプ（青）
+      taikin_tired: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(52,152,219,0.10)" stroke="#2980b9" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#2980b9" stroke-width="2.5"/>
+        <line x1="32" y1="52" x2="168" y2="52" stroke="#2980b9" stroke-width="2.5"/>
+        <line x1="32" y1="148" x2="168" y2="148" stroke="#2980b9" stroke-width="2.5"/>
+        <text x="100" y="68" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" font-weight="900" fill="#2980b9" letter-spacing="1">今日はお疲れ？</text>
+        <text x="100" y="98" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="19" font-weight="900" fill="#2980b9" letter-spacing="1">ゆっくり</text>
+        <text x="100" y="124" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="19" font-weight="900" fill="#2980b9" letter-spacing="1">休んでね🍵</text>
+        <text x="100" y="163" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" fill="#2980b9">😌 🍵 😌</text>
+      </svg>`,
+
+      // 笑顔あり：頑張ろうスタンプ（オレンジ）
+      ganbaro: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(230,90,20,0.10)" stroke="#e67e22" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#e67e22" stroke-width="2.5"/>
+        <line x1="32" y1="52" x2="168" y2="52" stroke="#e67e22" stroke-width="2.5"/>
+        <line x1="32" y1="148" x2="168" y2="148" stroke="#e67e22" stroke-width="2.5"/>
+        <text x="100" y="76" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="22" font-weight="900" fill="#e67e22" letter-spacing="1">今日も1日</text>
+        <text x="100" y="105" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="28" font-weight="900" fill="#e67e22" letter-spacing="2">頑張ろう！</text>
+        <text x="100" y="163" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" fill="#e67e22">😊 😊 😊</text>
+      </svg>`,
+
+      // 笑顔なし：もっと笑顔でスタンプ（ピンク）
+      mosmile: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="rgba(200,30,100,0.09)" stroke="#c0392b" stroke-width="7"/>
+        <circle cx="100" cy="100" r="79" fill="none" stroke="#c0392b" stroke-width="2.5"/>
+        <line x1="32" y1="52" x2="168" y2="52" stroke="#c0392b" stroke-width="2.5"/>
+        <line x1="32" y1="148" x2="168" y2="148" stroke="#c0392b" stroke-width="2.5"/>
+        <text x="100" y="72" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="22" font-weight="900" fill="#c0392b" letter-spacing="1">もっと笑顔で！</text>
+        <text x="100" y="104" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" font-weight="900" fill="#c0392b" letter-spacing="1">頑張りましょう</text>
+        <text x="100" y="163" text-anchor="middle" dominant-baseline="middle" font-family="serif" font-size="20" fill="#c0392b">😐 💪 😤</text>
+      </svg>`,
+
+      // レアスタンプ（紫のリボンバッジ）
+      rare: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 230">
+        <circle cx="100" cy="95" r="88" fill="#6c3483" stroke="#a569bd" stroke-width="5"/>
+        <circle cx="100" cy="95" r="76" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+        <text x="100" y="78" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="16" font-weight="900" fill="rgba(255,255,255,0.7)" letter-spacing="3">✦ RARE ✦</text>
+        <text x="100" y="106" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="22" font-weight="900" fill="white" letter-spacing="2">選ばれし者</text>
+        <text x="100" y="132" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="13" fill="rgba(255,255,255,0.7)" letter-spacing="2">おめでとう</text>
+        <polygon points="65,182 100,165 135,182 120,208 80,208" fill="#5b2c6f"/>
+        <polygon points="65,182 100,165 135,182 120,208 80,208" fill="none" stroke="#a569bd" stroke-width="2"/>
+      </svg>`,
+    };
+
+    // SVGを Image オブジェクトとして事前ロード
+    const STAMPS = {};
+    Object.entries(STAMP_DEFS).forEach(([key, svg]) => {
+      const img = new Image();
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      STAMPS[key] = img;
+    });
+
+    // =============================================
+    // 笑顔判定
+    // face-api.js をバックグラウンドでロード
+    // =============================================
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+    let smileReady = false;
+
+    (async () => {
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
+        ]);
+        smileReady = true;
+        console.log('😊 笑顔判定 ready');
+      } catch (e) {
+        console.warn('笑顔判定 unavailable:', e);
+      }
+    })();
+
+    // canvas を渡すと笑顔スコア(0〜1)を返す。顔未検出は null
+    async function detectSmile(canvas) {
+      if (!smileReady || typeof faceapi === 'undefined') return null;
+      try {
+        const det = await faceapi
+          .detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.25 }))
+          .withFaceExpressions();
+        return det ? det.expressions.happy : null;
+      } catch { return null; }
+    }
+
+    // スタンプ画像を canvas に描画するヘルパー
+    // x, y = 中心座標、size = 幅, rotation = ラジアン
+    function drawImg(ctx, key, x, y, size, rotation) {
+      const img = STAMPS[key];
+      if (!img) return;
+      // 回転考慮のマージン（最大~16°なので1.2倍で十分）
+      const half = size / 2 * (rotation ? 1.2 : 1.0);
+      if (_cW > 0) {
+        x = Math.max(half, Math.min(_cW - half, x));
+        y = Math.max(half, Math.min(_cH - half, y));
+      }
+      ctx.save();
+      ctx.translate(x, y);
+      if (rotation) ctx.rotate(rotation);
+      ctx.globalAlpha = 0.90;
+      ctx.drawImage(img, -size / 2, -size / 2, size, size);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    // =============================================
+    // カメラ
+    // =============================================
+    async function startCamera() {
+      // カメラ画面を確実に表示（ホームから戻った時も）
+      cameraScreen.style.display = 'flex';
+      resultScreen.style.display = 'none';
+      errorArea.style.display = 'none';
+      captureBtn.disabled = true;
+      stopCamera();
+      // 前のトラックが完全に解放されるのを少し待つ
+      await new Promise(r => setTimeout(r, 150));
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'user' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+        video.srcObject = mediaStream;
+        await new Promise((resolve, reject) => {
+          if (video.readyState >= 1) return resolve();
+          video.addEventListener('loadedmetadata', resolve, { once: true });
+          video.addEventListener('error', reject, { once: true });
+        });
+        video.play().catch(() => {});
+        captureBtn.disabled = false;
+      } catch (err) {
+        captureBtn.disabled = true;
+        const n = err.name || '';
+        errorMsg.textContent =
+          n === 'NotAllowedError' || n === 'PermissionDeniedError' ? 'カメラの許可が必要です。\n許可ダイアログで「許可」を押してから再試行してください。' :
+          n === 'NotFoundError'   ? 'カメラが見つかりません。' :
+          n === 'NotReadableError'? 'カメラが他のアプリで使用中です。' :
+                                    'カメラを起動できませんでした。';
+        errorArea.style.display = 'flex';
+      }
+    }
+
+    function stopCamera() {
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    }
+
+    async function capture() {
+      if (video.paused) { await video.play().catch(() => {}); return; }
+      if (!video.videoWidth || video.readyState < 2) return;
+
+      const loadingMsg = loading.querySelector('p');
+      loading.style.display = 'flex';
+      loadingMsg.textContent = 'デコ中...';
+      await new Promise(r => setTimeout(r, 80));
+
+      const W = video.videoWidth, H = video.videoHeight;
+      _cW = W; _cH = H;
+      resultCanvas.width = W; resultCanvas.height = H;
+      const ctx = resultCanvas.getContext('2d');
+      ctx.translate(W, 0); ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, W, H);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      const guide = calcGuide(W, H);
+
+      // 笑顔判定（モデルがロード済みの場合のみ）
+      let label;
+      if (smileReady) {
+        loadingMsg.textContent = '笑顔チェック中...';
+        const score = await detectSmile(resultCanvas);
+
+        if (score !== null) {
+          const pct = Math.round(score * 100);
+          if (currentMode === 'taikin') {
+            if (score >= 0.45) {
+              // 退勤・笑顔あり
+              drawImg(ctx, 'taikin_smile', W - guide.x*0.52, H - guide.y*0.50, W*0.60, 0.13);
+              em(ctx, '🍵', guide.x*0.45, guide.y*0.45, W*0.11);
+              label = `😊 笑顔 ${pct}% → 今日もお疲れ様！`;
+            } else {
+              // 退勤・笑顔なし
+              drawImg(ctx, 'taikin_tired', guide.x*0.52, H - guide.y*0.50, W*0.60, -0.13);
+              em(ctx, '🍵', W - guide.x*0.45, guide.y*0.45, W*0.11);
+              label = `😌 笑顔 ${pct}% → ゆっくり休んでね`;
+            }
+          } else {
+            if (score >= 0.45) {
+              // 出勤・笑顔あり
+              drawImg(ctx, 'ganbaro', W - guide.x*0.52, H - guide.y*0.50, W*0.60, 0.13);
+              em(ctx, '😊', guide.x*0.45, guide.y*0.45, W*0.11);
+              label = `😊 笑顔 ${pct}% → 頑張ろう！`;
+            } else {
+              // 出勤・笑顔なし
+              drawImg(ctx, 'mosmile', guide.x*0.52, H - guide.y*0.50, W*0.60, -0.13);
+              em(ctx, '😐', W - guide.x*0.45, guide.y*0.45, W*0.11);
+              label = `😐 笑顔 ${pct}% → もっと笑顔で！`;
+            }
+          }
+        } else {
+          // 顔が検出できなかった → 通常の装飾
+          label = applyDecoration(ctx, W, H, guide);
+        }
+      } else {
+        // モデル未ロード → 通常の装飾
+        label = applyDecoration(ctx, W, H, guide);
+      }
+
+      stopCamera();
+      loading.style.display = 'none';
+      showResult(label);
+    }
+
+    // =============================================
+    // ガイド枠・ゾーン計算
+    // =============================================
+    function calcGuide(W, H) {
+      let gw, gh;
+      if (H >= W) { gw = W * 0.58; gh = gw * (4/3); if (gh > H * 0.68) { gh = H * 0.68; gw = gh * 0.75; } }
+      else        { gh = H * 0.72; gw = gh * 0.75;  if (gw > W * 0.55) { gw = W * 0.55; gh = gw * (4/3); } }
+      return { x: (W-gw)/2, y: (H-gh)/2, w: gw, h: gh };
+    }
+
+    function getOuterZones(W, H, g) {
+      return [
+        { x: 0,         y: 0,         w: W,              h: g.y            }, // 上
+        { x: 0,         y: g.y + g.h, w: W,              h: H - g.y - g.h  }, // 下
+        { x: 0,         y: g.y,       w: g.x,            h: g.h            }, // 左
+        { x: g.x + g.w, y: g.y,       w: W - g.x - g.w, h: g.h            }, // 右
+      ].filter(z => z.w > 10 && z.h > 10);
+    }
+
+    function rand(z) { return { x: z.x + Math.random()*z.w, y: z.y + Math.random()*z.h }; }
+
+    // 四隅の代表座標を返す（スタンプをどこに置くかの基準点）
+    function corners(W, H, g) {
+      return [
+        { x: g.x * 0.48,       y: g.y * 0.48      }, // 左上
+        { x: W - g.x * 0.48,   y: g.y * 0.48      }, // 右上
+        { x: g.x * 0.48,       y: H - g.y * 0.48  }, // 左下
+        { x: W - g.x * 0.48,   y: H - g.y * 0.48  }, // 右下
+      ];
+    }
+
+    // =============================================
+    // 描画ユーティリティ
+    // =============================================
+    function em(ctx, e, x, y, size) {
+      ctx.save();
+      ctx.font = Math.round(size) + 'px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(e, x, y);
+      ctx.restore();
+    }
+
+    function txt(ctx, text, x, y, size, color, rotated) {
+      ctx.save();
+      ctx.font = 'bold ' + Math.round(size) + 'px -apple-system, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      if (rotated) { ctx.translate(x, y); ctx.rotate(-0.18); x = 0; y = 0; }
+      ctx.lineWidth = Math.max(size * 0.18, 2);
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
+      ctx.restore();
+    }
+
+    // 紙吹雪1ピースを描く
+    function confettiPiece(ctx, x, y, size, color, angle) {
+      ctx.save();
+      ctx.fillStyle = color; ctx.globalAlpha = 0.88;
+      ctx.translate(x, y); ctx.rotate(angle);
+      if (Math.random() > 0.45) { ctx.fillRect(-size, -size*.4, size*2, size*.8); }
+      else { ctx.beginPath(); ctx.arc(0, 0, size*.65, 0, Math.PI*2); ctx.fill(); }
+      ctx.restore();
+    }
+
+    // =============================================
+    // 装飾定義
+    // ★ 追加は各配列に { name, draw(ctx,W,H,g){} } を足すだけ ★
+    // ★ 自作画像は drawImg(ctx, 'キー名', x, y, サイズ, 回転) で使える ★
+    // =============================================
+    const DECORATIONS = {
+
+      // ──────────────────────────────────────────
+      // 軽い系 80%  ← スタンプ1〜2個＋アクセント少し
+      // ──────────────────────────────────────────
+      light: [
+
+        {
+          // 出勤完了スタンプを右下にドン、左上に小さい絵文字だけ
+          name: '📋 出勤完了',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'syukkin', W - g.x*0.52, H - g.y*0.50, W*0.58, 0.14);
+            em(ctx, '✨', g.x*0.42, g.y*0.42, W*0.10);
+            em(ctx, '☀️', g.x*0.60, H - g.y*0.80, W*0.08);
+          },
+        },
+
+        {
+          // お疲れ様スタンプを左下にドン
+          name: '🙌 お疲れ様',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'otsukare', g.x*0.52, H - g.y*0.50, W*0.58, -0.14);
+            em(ctx, '⭐', W - g.x*0.42, g.y*0.42, W*0.10);
+            em(ctx, '✨', W - g.x*0.55, H - g.y*0.80, W*0.08);
+          },
+        },
+
+        {
+          // GOOD JOBを右上にドン
+          name: '👍 GOOD JOB',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'goodjob', W - g.x*0.52, g.y*0.50, W*0.58, 0.12);
+            em(ctx, '🎉', g.x*0.45, H - g.y*0.45, W*0.11);
+            em(ctx, '✨', g.x*0.55, g.y*0.75, W*0.08);
+          },
+        },
+
+        {
+          // 出勤完了＋お疲れ様の2枚刺し
+          name: '📋 W スタンプ',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'syukkin', W - g.x*0.52, H - g.y*0.50, W*0.50, 0.16);
+            drawImg(ctx, 'goodjob', g.x*0.52,     g.y*0.50,     W*0.46, -0.12);
+          },
+        },
+
+      ],
+
+      // ──────────────────────────────────────────
+      // 季節系 15%  ← スタンプ1個＋季節絵文字を数個
+      // ──────────────────────────────────────────
+      seasonal: [
+
+        {
+          name: '🌸 桜',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'goodjob', g.x*0.52, H - g.y*0.50, W*0.55, -0.12);
+            // 桜を角に控えめに
+            em(ctx, '🌸', W - g.x*0.45, g.y*0.40, W*0.14);
+            em(ctx, '🌸', W - g.x*0.55, H - g.y*0.75, W*0.10);
+            em(ctx, '🦋', g.x*0.48, g.y*0.45, W*0.10);
+          },
+        },
+
+        {
+          name: '❄️ 雪',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'otsukare', W - g.x*0.52, H - g.y*0.50, W*0.55, 0.12);
+            em(ctx, '❄️', g.x*0.45, g.y*0.42, W*0.13);
+            em(ctx, '⛄', g.x*0.48, H - g.y*0.75, W*0.11);
+            em(ctx, '❄️', W - g.x*0.50, g.y*0.75, W*0.09);
+          },
+        },
+
+        {
+          name: '☀️ 夏',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'goodjob', W - g.x*0.52, g.y*0.50, W*0.55, 0.10);
+            em(ctx, '🍧', g.x*0.45, g.y*0.45, W*0.14);
+            em(ctx, '🌊', g.x*0.48, H - g.y*0.45, W*0.12);
+            em(ctx, '🌺', W - g.x*0.48, H - g.y*0.75, W*0.10);
+          },
+        },
+
+        {
+          name: '🎆 花火',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'otsukare', g.x*0.52, g.y*0.50, W*0.55, -0.10);
+            em(ctx, '🎆', W - g.x*0.45, g.y*0.42, W*0.16);
+            em(ctx, '🎇', W - g.x*0.50, H - g.y*0.48, W*0.13);
+            em(ctx, '🏮', g.x*0.48, H - g.y*0.45, W*0.11);
+          },
+        },
+
+      ],
+
+      // ──────────────────────────────────────────
+      // レア 5%  ← 金フレーム＋スタンプ、または2枚刺し
+      // ──────────────────────────────────────────
+      rare: [
+
+        {
+          name: '🏅 金フレーム＋SPECIAL',
+          draw(ctx, W, H, g) {
+            // 金グラデフレーム
+            const bw = Math.max(W*0.045, 8);
+            const gr = ctx.createLinearGradient(0, 0, W, H);
+            gr.addColorStop(0,'#ffd700'); gr.addColorStop(.4,'#fffacd'); gr.addColorStop(1,'#daa520');
+            ctx.strokeStyle = gr; ctx.lineWidth = bw;
+            ctx.strokeRect(bw/2, bw/2, W-bw, H-bw);
+            ctx.strokeStyle = 'rgba(255,215,0,0.35)'; ctx.lineWidth = 1.5;
+            ctx.strokeRect(bw+6, bw+6, W-bw*2-12, H-bw*2-12);
+            // SPECIALスタンプを右下にドン
+            drawImg(ctx, 'special', W - g.x*0.52, H - g.y*0.50, W*0.55, 0.10);
+            em(ctx, '⭐', g.x*0.45, g.y*0.45, W*0.11);
+            em(ctx, '✨', g.x*0.48, H - g.y*0.75, W*0.09);
+          },
+        },
+
+        {
+          name: '👑 SPECIAL＋レアの2枚刺し',
+          draw(ctx, W, H, g) {
+            drawImg(ctx, 'special', W - g.x*0.52, g.y*0.50,     W*0.55,  0.14);
+            drawImg(ctx, 'rare',    g.x*0.52,     H - g.y*0.50, W*0.55, -0.14);
+          },
+        },
+
+        {
+          name: '🌟 金フレーム＋W刺し',
+          draw(ctx, W, H, g) {
+            // フレーム
+            const bw = Math.max(W*0.045, 8);
+            const gr = ctx.createLinearGradient(0, 0, W, H);
+            gr.addColorStop(0,'#ffd700'); gr.addColorStop(.5,'#fffacd'); gr.addColorStop(1,'#ffd700');
+            ctx.strokeStyle = gr; ctx.lineWidth = bw;
+            ctx.strokeRect(bw/2, bw/2, W-bw, H-bw);
+            // 対角にスタンプ2種
+            drawImg(ctx, 'special', W - g.x*0.52, H - g.y*0.50, W*0.50,  0.14);
+            drawImg(ctx, 'rare',    g.x*0.52,     g.y*0.50,     W*0.48, -0.12);
+            em(ctx, '⭐', g.x*0.48, H - g.y*0.75, W*0.10);
+            em(ctx, '⭐', W - g.x*0.48, g.y*0.75, W*0.10);
+          },
+        },
+
+      ],
+    };
+
+    function applyDecoration(ctx, W, H, guide) {
+      const r = Math.random();
+      const [items, prefix] =
+        r < 0.80 ? [DECORATIONS.light,    '']          :
+        r < 0.95 ? [DECORATIONS.seasonal, '【季節】']   :
+                   [DECORATIONS.rare,     '【レア✨】'];
+      const item = items[Math.floor(Math.random() * items.length)];
+      item.draw(ctx, W, H, guide);
+      return prefix + item.name;
+    }
+
+    function showResult(label) {
+      cameraScreen.style.display = 'none';
+      resultScreen.style.display = 'flex';
+      categoryLabel.textContent  = label;
+    }
+    // =============================================
+    // ランディング画面：時計 & 遷移
+    // =============================================
+    const landingScreen = document.getElementById('landing-screen');
+
+    function showLanding() {
+      resultScreen.style.display = 'none';
+      cameraScreen.style.display = 'none';
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      video.srcObject = null;
+      landingScreen.style.display = 'flex';
+      landingScreen.classList.remove('exit');
+    }
+
+    captureBtn.addEventListener('click', capture);
+    retakeBtn.addEventListener('click', showLanding);
+    retryBtn.addEventListener('click', startCamera);
+    const ldTime        = document.getElementById('ld-time');
+    const ldDate        = document.getElementById('ld-date');
+    const ldGreeting    = document.getElementById('ld-greeting');
+    const syukkinBtn    = document.getElementById('syukkin-btn');
+    const taikinBtn     = document.getElementById('taikin-btn');
+
+    const DAYS = ['日','月','火','水','木','金','土'];
+
+    function updateClock() {
+      const now = new Date();
+      const h   = String(now.getHours()).padStart(2, '0');
+      const m   = String(now.getMinutes()).padStart(2, '0');
+      const s   = String(now.getSeconds()).padStart(2, '0');
+      ldTime.textContent = `${h}:${m}:${s}`;
+      ldDate.textContent = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（${DAYS[now.getDay()]}）`;
+      const hr = now.getHours();
+      ldGreeting.textContent = hr < 12 ? 'おはようございます' : hr < 18 ? 'お疲れ様です' : 'お疲れ様でした';
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    function goCamera(mode) {
+      currentMode = mode;
+      landingScreen.classList.add('exit');
+      setTimeout(() => {
+        landingScreen.style.display = 'none';
+        startCamera();
+      }, 550);
+    }
+    syukkinBtn.addEventListener('click', () => goCamera('syukkin'));
+    taikinBtn.addEventListener('click',  () => goCamera('taikin'));
+  </script>
+</body>
+</html>
